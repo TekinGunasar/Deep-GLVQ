@@ -21,6 +21,12 @@ class DeepGLVQ(nn.Module):
 
         super().__init__()
 
+        self.train_accs = []
+        self.val_accs = []
+
+        self.train_losses = []
+        self.val_losses = []
+
         self.gamma = gamma
         
         self.n_dims_for_classif = n_dims_for_classif
@@ -115,8 +121,9 @@ class DeepGLVQ(nn.Module):
         
         P_idxs = P_idxs.int()
 
-        return P,Py,P_idxs
-        
+        self.P = P
+        self.Py = Py
+        self.P_idxs = P_idxs
 
     def L_GLVQ(self,X, y, P, Py, gamma = 0, epsilon=1e-8):
         pairwise_distances = torch.cdist(X, P)  
@@ -138,8 +145,7 @@ class DeepGLVQ(nn.Module):
 
 
 
-    def get_metrics(self, P, Py, on='validation'):
-        train_latents = self.forward(self.train_data).detach()
+    def get_metrics(self,on='validation'):
         
         if on == 'validation':
             eval_latents = self.forward(self.validation_data).detach()
@@ -151,15 +157,15 @@ class DeepGLVQ(nn.Module):
             eval_latents = self.forward(self.train_data).detach()
             eval_labels = self.train_labels.detach()
     
-        dists = torch.cdist(eval_latents, P)  
+        dists = torch.cdist(eval_latents, self.P)  
     
         pred_indices = torch.argmin(dists, dim=1)
-        preds = Py[pred_indices] 
+        preds = self.Py[pred_indices] 
     
         acc = torch.sum(preds == eval_labels) / len(preds)
 
         loss = self.L_GLVQ(
-            train_latents,self.train_labels,P,Py,gamma = self.gamma
+            eval_latents,eval_labels,self.P,self.Py,gamma = self.gamma
         )
     
         return loss, acc
@@ -172,14 +178,16 @@ class DeepGLVQ(nn.Module):
         self.test_data,self.test_labels = self.split_data_and_labels(self.test_data)
         
 
-    def train_encoder(self):
+    def train_encoder(self,verbose = False):
+
 
         self.train()
+        
         #The prototypes, their associated labels, and their associated indexes
-        P,Py,P_idxs = self.init_prototypes()
+        self.init_prototypes()
 
         #The original data points that are associated with the prototypes in the latent space
-        orig_data_points = self.train_data[P_idxs]
+        orig_data_points = self.train_data[self.P_idxs]
 
         for epoch in range(self.n_epochs):
 
@@ -189,46 +197,33 @@ class DeepGLVQ(nn.Module):
                 
                 cur_batch_latents = self.forward(data)
 
-                P_current = self.forward(orig_data_points)
+                self.P = self.forward(orig_data_points)
                 
                 glvq_loss = self.L_GLVQ(
-                    cur_batch_latents,target,P_current,Py,gamma = self.gamma
+                    cur_batch_latents,target,self.P,self.Py,gamma = self.gamma
                 )
+                
     
                 glvq_loss.backward()
                 self.optimizer.step()
 
-            val_loss,val_acc = self.get_metrics(P_current,Py,on = 'validation')
-            train_loss,train_acc = self.get_metrics(P_current,Py,on = 'train')
+            val_loss,val_acc = self.get_metrics(on = 'validation')
+            train_loss,train_acc = self.get_metrics(on = 'train')
 
-            print(f'Epoch {epoch + 1} validation loss: {val_loss}')
+
+            print(f'Epoch {epoch + 1} train accuracy: {train_acc}')
             print(f'Epoch {epoch + 1} validation accuracy: {val_acc}\n')
 
             print(f'Epoch {epoch + 1} train loss: {train_loss}')
-            print(f'Epoch {epoch + 1} train accuracy: {train_acc}\n')
+            print(f'Epoch {epoch + 1} validation loss: {val_loss}\n')
 
-        test_loss,test_acc = self.get_metrics(P_current,Py,on = 'test')
+            self.train_losses.append(train_loss.item())
+            self.train_accs.append(train_acc.item())
 
-        print(f'Test loss is {test_loss} and test accuracy is {test_acc}')
+            self.val_losses.append(val_loss.item())
+            self.val_accs.append(val_acc.item())
 
-    
-                
+        self.test_loss,self.test_acc = self.get_metrics(on = 'test')
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-            
-
-            
-
+        print(f'Test loss is {self.test_loss} and test accuracy is {self.test_acc}')
     
